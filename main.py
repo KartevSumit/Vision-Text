@@ -1,31 +1,138 @@
 import os
-from config import FEATURES_FILE, CAPTIONS_FILE, BASE_DIR
-from preprocess import extract_image_features, load_features, load_captions, create_tokenizer, max_caption_length
-from train_and_eval import train_model, evaluate_model
+import numpy as np
+from tqdm import tqdm
+from tensorflow.keras.preprocessing.text import Tokenizer
+from nltk.translate.bleu_score import corpus_bleu
+
+# Import from our modules
+from feature_extraction import extract_features, load_features
+from model import create_caption_model, data_generator, predict_caption
+
+# Configuration
+BASE_DIR = 'D:/Program/archive'
+WORKING_DIR = 'D:/Program/Data'
+EPOCHS = 20
+BATCH_SIZE = 32
+
+
+def load_captions(captions_path):
+    with open(captions_path, 'r') as f:
+        next(f)  # Skip header
+        captions_doc = f.read()
+
+    mapping = {}
+
+    for line in tqdm(captions_doc.split('\n')):
+        tokens = line.split('.')
+        if len(line) < 2:
+            continue
+
+        image_id, caption = tokens[0], tokens[1]
+        image_id = image_id.split('.')[0]
+        caption = caption.strip()
+
+        if image_id not in mapping:
+            mapping[image_id] = []
+
+        mapping[image_id].append(caption)
+
+    return mapping
+
+
+def clean_captions(mapping):
+    """Clean and preprocess captions"""
+    for key, captions in mapping.items():
+        for i in range(len(captions)):
+            caption = captions[i]
+            # Convert to lowercase
+            caption = caption.lower()
+            # Remove non-alphabetic characters
+            caption = ''.join([c for c in caption if c.isalpha() or c.isspace()])
+            # Remove extra spaces
+            caption = ' '.join(caption.split())
+            # Add start and end tokens
+            caption = '<start> ' + ' '.join([word for word in caption.split() if len(word) > 1]) + ' <end>'
+            captions[i] = caption
 
 
 def main():
-    # 1. Features
-    if not os.path.exists(FEATURES_FILE):
-        features = extract_image_features(BASE_DIR, FEATURES_FILE)
+    # Extract or load image features
+    features_path = os.path.join(WORKING_DIR, 'features.pkl')
+    if os.path.exists(features_path):
+        print("Loading pre-extracted features...")
+        features = load_features(features_path)
     else:
-        features = load_features(FEATURES_FILE)
+        print("Extracting image features...")
+        features = extract_features(
+            os.path.join(BASE_DIR, 'Images'),
+            features_path
+        )
 
-    # 2. Captions & Tokenizer
-    captions   = load_captions(CAPTIONS_FILE)
-    tokenizer  = create_tokenizer(captions)
+    # Load and process captions
+    print("Loading and processing captions...")
+    mapping = load_captions(os.path.join(BASE_DIR, 'caption.txt'))
+    clean_captions(mapping)
+
+    # Prepare data for model
+    print("Preparing data for model training...")
+    all_captions = []
+    for key in mapping:
+        all_captions.extend(mapping[key])
+
+    # Create tokenizer
+    tokenizer = Tokenizer()
+    tokenizer.fit_on_texts(all_captions)
     vocab_size = len(tokenizer.word_index) + 1
-    max_len    = max_caption_length(captions)
+    print(f"Vocabulary size: {vocab_size}")
 
-    # 3. Split
-    ids       = list(captions.keys())
-    split     = int(len(ids) * 0.9)
-    train_ids = ids[:split]
-    test_ids  = ids[split:]
+    # Calculate maximum caption length
+    max_length = max(len(caption.split()) for caption in all_captions)
+    print(f"Maximum caption length: {max_length}")
 
-    # 4. Train & Evaluate
-    train_model(train_ids, captions, features, tokenizer, max_len, vocab_size)
-    evaluate_model(test_ids, captions, features, tokenizer, max_len)
+    # Split data into training and testing sets
+    image_ids = list(mapping.keys())
+    split = int(len(image_ids) * 0.90)
+    train_ids = image_ids[:split]
+    test_ids = image_ids[split:]
+    print(f"Training samples: {len(train_ids)}, Testing samples: {len(test_ids)}")
 
-if __name__ == '__main__':
+    # Create and train model
+    print("Creating model...")
+    model = create_caption_model(vocab_size, max_length)
+
+    print("Training model...")
+    steps_per_epoch = len(train_ids)
+    for epoch in range(EPOCHS):
+        print(f"Epoch {epoch + 1}/{EPOCHS}")
+        generator = data_generator(
+            train_ids, mapping, features, tokenizer,
+            max_length, vocab_size, BATCH_SIZE
+        )
+        model.fit(generator, epochs=1, steps_per_epoch=steps_per_epoch, verbose=1)
+
+    # Save the trained model
+    model_path = os.path.join(WORKING_DIR, 'best_model.h5')
+    model.save(model_path)
+    print(f"Model saved to {model_path}")
+
+    # Evaluate model using BLEU score
+    print("Evaluating model...")
+    actual, predicted = list(), list()
+    for key in tqdm(test_ids):
+        captions = mapping[key]
+        y_pred = predict_caption(model, features[key], tokenizer, max_length)
+
+        # Process the actual captions and predictions
+        actual_captions = [caption.split() for caption in captions]
+        y_pred = y_pred.split()
+
+        actual.append(actual_captions)
+        predicted.append(y_pred)
+
+    # Calculate BLEU scores
+    print("BLEU-1: %f" % corpus_bleu(actual, predicted, weights=(1.0, 0, 0, 0)))
+    print("BLEU-2: %f" % corpus_bleu(actual, predicted, weights=(0.5, 0.5, 0, 0)))
+
+
+if __name__ == "__main__":
     main()
