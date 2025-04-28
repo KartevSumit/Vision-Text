@@ -10,8 +10,8 @@ from model import create_caption_model, data_generator, predict_caption
 
 # Configuration
 BASE_DIR = 'D:/Program/archive'
-WORKING_DIR = 'D:/Program/Data'
-EPOCHS = 20
+WORKING_DIR = './Data'
+EPOCHS = 50
 BATCH_SIZE = 32
 
 
@@ -51,7 +51,7 @@ def clean_captions(mapping):
             # Remove extra spaces
             caption = ' '.join(caption.split())
             # Add start and end tokens
-            caption = '<start> ' + ' '.join([word for word in caption.split() if len(word) > 1]) + ' <end>'
+            caption = 'startseq ' + ' '.join([word for word in caption.split() if len(word) > 1]) + ' endseq'
             captions[i] = caption
 
 
@@ -70,7 +70,7 @@ def main():
 
     # Load and process captions
     print("Loading and processing captions...")
-    mapping = load_captions(os.path.join(BASE_DIR, 'caption.txt'))
+    mapping = load_captions(os.path.join(BASE_DIR, 'captions.txt'))
     clean_captions(mapping)
 
     # Prepare data for model
@@ -96,38 +96,53 @@ def main():
     test_ids = image_ids[split:]
     print(f"Training samples: {len(train_ids)}, Testing samples: {len(test_ids)}")
 
-    # Create and train model
-    print("Creating model...")
-    model = create_caption_model(vocab_size, max_length)
-
-    print("Training model...")
-    steps_per_epoch = len(train_ids)
-    for epoch in range(EPOCHS):
-        print(f"Epoch {epoch + 1}/{EPOCHS}")
-        generator = data_generator(
-            train_ids, mapping, features, tokenizer,
-            max_length, vocab_size, BATCH_SIZE
-        )
-        model.fit(generator, epochs=1, steps_per_epoch=steps_per_epoch, verbose=1)
-
-    # Save the trained model
+    # Check if model already exists
     model_path = os.path.join(WORKING_DIR, 'best_model.h5')
-    model.save(model_path)
-    print(f"Model saved to {model_path}")
+
+    if os.path.exists(model_path):
+        print(f"Loading existing model from {model_path}")
+        from tensorflow.keras.models import load_model
+        model = load_model(model_path)
+    else:
+        # Create and train model
+        print("Creating model...")
+        model = create_caption_model(vocab_size, max_length)
+
+        print("Training model...")
+        steps_per_epoch = len(train_ids)
+        for epoch in range(EPOCHS):
+            print(f"Epoch {epoch + 1}/{EPOCHS}")
+            generator = data_generator(
+                train_ids, mapping, features, tokenizer,
+                max_length, vocab_size, BATCH_SIZE
+            )
+            model.fit(generator, epochs=1, steps_per_epoch=steps_per_epoch, verbose=1)
+
+        # Save the trained model
+        print(f"Model saved to {model_path}")
+        model.save(model_path)
 
     # Evaluate model using BLEU score
     print("Evaluating model...")
     actual, predicted = list(), list()
-    for key in tqdm(test_ids):
-        captions = mapping[key]
-        y_pred = predict_caption(model, features[key], tokenizer, max_length)
 
-        # Process the actual captions and predictions
-        actual_captions = [caption.split() for caption in captions]
-        y_pred = y_pred.split()
+    batch_size = 25
+    for i in range(0, len(test_ids), batch_size):
+        batch_ids = test_ids[i:i + batch_size]
+        print(f"Processing batch {i // batch_size + 1}/{(len(test_ids) - 1) // batch_size + 1}")
 
-        actual.append(actual_captions)
-        predicted.append(y_pred)
+        for key in tqdm(batch_ids):
+            captions = mapping[key]
+            y_pred = predict_caption(model, features[key], tokenizer, max_length)
+
+            actual_captions = [caption.split() for caption in captions]
+            y_pred = y_pred.split()
+
+            actual.append(actual_captions)
+            predicted.append(y_pred)
+
+        import gc
+        gc.collect()
 
     # Calculate BLEU scores
     print("BLEU-1: %f" % corpus_bleu(actual, predicted, weights=(1.0, 0, 0, 0)))

@@ -55,18 +55,29 @@ def data_generator(data_keys, mapping, features, tokenizer, max_length, vocab_si
 
 
 def idx_to_word(integer, tokenizer):
-    """Convert an integer to its corresponding word"""
-    for word, index in tokenizer.word_index.items():
-        if index == integer:
-            return word
+    if hasattr(tokenizer, 'index_word'):
+        return tokenizer.index_word.get(integer, None)
+    else:
+        for word, index in tokenizer.word_index.items():
+            if index == integer:
+                return word
     return None
 
 
 def predict_caption(model, image, tokenizer, max_length):
-    in_text = '<start>'
+
+    if len(image.shape) == 3:
+        image = image.reshape(1, 4096)
+    elif len(image.shape) == 1:
+        image = np.expand_dims(image, axis=0)
+
+    in_text = 'startseq'
+
     for i in range(max_length):
         sequence = tokenizer.texts_to_sequences([in_text])[0]
         sequence = pad_sequences([sequence], maxlen=max_length)
+
+        # Get prediction
         yhat = model.predict([image, sequence], verbose=0)
         yhat = np.argmax(yhat)
         word = idx_to_word(yhat, tokenizer)
@@ -76,7 +87,7 @@ def predict_caption(model, image, tokenizer, max_length):
 
         in_text += " " + word
 
-        if word == '<end>':
+        if word == 'endseq':
             break
 
     return in_text
