@@ -9,7 +9,7 @@ from feature_extraction import extract_features, load_features
 from model import create_caption_model, data_generator, predict_caption
 
 # Configuration
-BASE_DIR = 'D:/Program/archive'
+BASE_DIR = './Data/Flickr8k/'
 WORKING_DIR = './Data'
 EPOCHS = 50
 BATCH_SIZE = 32
